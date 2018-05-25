@@ -1,0 +1,312 @@
+---
+title: "Portfolio1"
+author: "Christoffer L. Olesen"
+date: "15 February 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+WD and Libraries
+```{r}
+#setwd("~/Documents/skole/CogSci/4th semester/methods/Portfolio 1/2018 - Eye tracking")
+
+library(data.table)
+library(stringr)
+library(caret)
+library(lmerTest)
+library(ModelMetrics)
+library(tidyverse)
+library(jpeg)
+library(grid)
+
+```
+
+Load and tidy data
+```{r}
+#loading data
+d_sample = read.csv("2018 - Eye tracking/samplesV1.csv")
+d_fixations = read.csv("2018 - Eye tracking/fixationsV1.csv")
+d_saccades = read.csv("2018 - Eye tracking/saccadesV1.csv")
+
+
+#---- VISUAL SEARCH ----
+
+#Condition cullumn in sample data
+d_sample$condition[d_sample$Trial < 6 & d_sample$SearchOrder == 1] = "star"
+d_sample$condition[d_sample$Trial > 5 & d_sample$SearchOrder == 1] = "count"
+d_sample$condition[d_sample$Trial < 6 & d_sample$SearchOrder == 2] = "count"
+d_sample$condition[d_sample$Trial > 5 & d_sample$SearchOrder == 2] = "star"
+
+#Condition cullumn in fixation data
+d_fixations$condition[d_fixations$Trial < 6 & d_fixations$SearchOrder == 1] = "star"
+d_fixations$condition[d_fixations$Trial > 5 & d_fixations$SearchOrder == 1] = "count"
+d_fixations$condition[d_fixations$Trial < 6 & d_fixations$SearchOrder == 2] = "count"
+d_fixations$condition[d_fixations$Trial > 5 & d_fixations$SearchOrder == 2] = "star"
+
+#Condition cullumn in saccades data
+d_saccades$condition[d_saccades$Trial < 6 & d_saccades$SearchOrder == 1] = "star"
+d_saccades$condition[d_saccades$Trial > 5 & d_saccades$SearchOrder == 1] = "count"
+d_saccades$condition[d_saccades$Trial < 6 & d_saccades$SearchOrder == 2] = "count"
+d_saccades$condition[d_saccades$Trial > 5 & d_saccades$SearchOrder == 2] = "star"
+
+
+#---- SOCIAL ENGAGEMENT ----
+
+#load log files
+log_files = list.files(pattern="*.csv", path="2018 - Eye tracking/PupilsLogs", full.names = TRUE)
+log_data = do.call(rbind, lapply(log_files, function(x) read.csv(x)))
+
+#tidy log data
+log_data$X = log_data$X + 1
+setnames(log_data, "subject", "ParticipantID")
+setnames(log_data, "X", "Trial")
+
+# extraxcting data from video cullumn
+log_data$videoGender = substring(log_data$video, first = 1, last = 1)
+log_data$videoGender[log_data$videoGender == "f"] = "female"
+log_data$videoGender[log_data$videoGender == "m"] = "male"
+
+log_data$videoDirection = substring(log_data$video, first = 9, last = 11)
+log_data$videoDirection[log_data$videoDirection == "div"] = "away"
+log_data$videoDirection[log_data$videoDirection == "dir"] = "direct"
+
+log_data$videoLook = substring(log_data$video, first = 13, last = 13)
+log_data$videoLook[log_data$videoLook == "+"] = "up"
+log_data$videoLook[log_data$videoLook == "-"] = "down"
+
+
+
+#Merging data
+d_sample2 = merge(d_sample, log_data, by=c("Trial", "ParticipantID"), all = TRUE)
+d_fixations2 = merge(d_fixations, log_data, by=c("Trial", "ParticipantID"), all = TRUE)
+d_saccades2 = merge(d_saccades, log_data, by=c("Trial", "ParticipantID"), all = TRUE)
+```
+
+Cross validation of models: VISUAL SEARCH
+```{r}
+
+#---- VISUAL SEARCH ----
+#Make Visual Search subset
+VS_subset = subset(d_fixations2, Task == "VisualSearch")
+
+
+#------ Fold data ------
+#Create fold with unique ParticipantID
+VS_subset$SubjectN = as.numeric(as.factor(as.character(VS_subset$ParticipantID)))
+folds = createFolds(unique(VS_subset$SubjectN), k = 3)
+
+
+#--------Create empty data frame for results --------
+
+Model_Comp = data.frame()
+
+
+#----------------Loop----------------
+Models = list("Duration ~ condition + (1+condition|ParticipantID)",
+              "Duration ~ condition + Trial + (1+condition|ParticipantID)",
+              "Duration ~ condition * Trial + (1+condition|ParticipantID)"
+)
+              
+
+for (MODEL in Models){
+  results = data.frame()
+  for (k in folds){
+    #------ Split into training and test data ------ 
+    #Create training dataset, data not in fold k
+    data_train = subset(VS_subset,!(VS_subset$SubjectN %in% k))
+    #Create test dataset, data in fold k
+    data_test = subset(VS_subset,SubjectN %in% k)
+    
+    #------ train model - apply model to data_train ------
+    m = glmer(MODEL, data_train, family = gaussian(link=log))
+    
+    predict_train = predict(m, data_train, allow.new.levels = T)
+    
+    rmse_train = rmse(data_train$Duration, predict_train)
+    
+    
+    #------ test the model - test model on data_test ------
+    
+    predict_test = predict(m, data_test, allow.new.levels = T)
+    
+    rmse_test = rmse(data_test$Duration, predict_test)
+    
+    #------ save the performance ------ 
+    
+    var = substring(MODEL, first = 12, last = 100)
+    
+    one_row = data.frame(Var = var, RMSE_train = rmse_train, RMSE_test = rmse_test)
+    
+    results = rbind(results, one_row)
+  }
+  #Means and SDs
+  train_mean = mean(results$RMSE_train)
+  train_SD = sd(results$RMSE_train)
+  
+  test_mean = mean(results$RMSE_test)
+  test_SD = sd(results$RMSE_test)
+  
+  one_row = data.frame(Var = var, TrainMean = train_mean, TestMean = test_mean, MeanDif = train_mean-test_mean, TrainSD = train_SD, TestSD = test_SD, SdDif = train_SD-test_SD )
+  
+  Model_Comp = rbind(Model_Comp, one_row)
+  
+}
+
+
+
+VSmodel = glmer(Duration ~ condition + (1+condition|ParticipantID), VS_subset, family = gaussian(link=log))
+summary(VSmodel)
+```
+
+
+
+Plots: Visual search
+
+```{r}
+# HEAT MAP 
+img1 <- readJPEG('2018 - Eye tracking/eyetrackingscripts/foraging/ng073ws.jpg')
+g1 <- rasterGrob(img1, interpolate=TRUE)
+img2 <- readJPEG('2018 - Eye tracking/eyetrackingscripts/foraging/ng150ws.jpg')
+g2 <- rasterGrob(img2, interpolate=TRUE)
+
+img4 <- readJPEG("2018 - Eye tracking/eyetrackingscripts/foraging/ng021ws.jpg")
+g4 <- rasterGrob(img4, interpolate=TRUE)
+
+VS_subset_participant = subset(VS_subset, ParticipantID=='5_1_m2')
+
+
+#density
+ggplot(subset(VS_subset, ParticipantID=='5_1_m2' & Trial==5), aes(x = PositionX, y = 1081 - PositionY)) +
+  xlim(0,1920) +
+  ylim(0, 1080) +
+  annotation_custom(g1, xmin=-Inf, xmax=Inf, ymin=-0, ymax=1080) + #xmin=-Inf, xmax=Inf, ymin=-Inf, ymax=Inf) +
+  stat_density2d(geom="raster", aes(fill=..density.., alpha=sqrt(sqrt(..density..))), contour=FALSE, n=1000) + 
+  scale_alpha(range = c(0.1, 0.6)) + 
+  scale_fill_gradientn(colours = jet.colors(10), trans="sqrt")
+
+ggplot(subset(VS_subset, ParticipantID=='5_1_m2' & Trial==8), aes(x = PositionX, y = 1081 - PositionY)) +
+  xlim(0,1920) +
+  ylim(0, 1080) +
+  annotation_custom(g2, xmin=-Inf, xmax=Inf, ymin=-0, ymax=1080) + #xmin=-Inf, xmax=Inf, ymin=-Inf, ymax=Inf) +
+  stat_density2d(geom="raster", aes(fill=..density.., alpha=sqrt(sqrt(..density..))), contour=FALSE, n=1000) + 
+  scale_alpha(range = c(0.1, 0.6)) + 
+  scale_fill_gradientn(colours = jet.colors(10), trans="sqrt")
+
+
+x = subset(VS_subset, ParticipantID=='1_1_f1' & Trial==1)
+x = x[order(x$Fixation),]
+
+#SCANPATHS
+ggplot(x, aes(x=PositionX, y= 1081 - PositionY, label=Fixation)) +
+  xlim(0,1920) +
+  ylim(0, 1080) +
+  annotation_custom(g4, xmin=-Inf, xmax=Inf, ymin=-0, ymax=1080) +
+  geom_point(color = "seagreen", size = subset(VS_subset, ParticipantID=='1_1_f1' & Trial==1)$Duration/25, alpha = 0.6) +
+  geom_path(size = 0.4, alpha = 0.6, color = "limegreen") +
+  geom_text(aes(label = Fixation, size = 5), color = "black")
+
+
+#Density plot 
+ggplot(VS_subset, aes(x = Duration, color = condition)) +
+  geom_density()+
+  xlim(0,1500)
+
+
+```
+
+Cross validation of models: SOCIAL ENGAGEMENT
+```{r}
+#Create subset of data
+SE_subset = subset(d_sample2, Task == "SocialEngagement" & Blink == 0)
+
+# scaling time and pupil size
+SE_subset$TimeScaled = scale(SE_subset$TrialTime)
+SE_subset$PupilScaled = scale(SE_subset$PupilSize)
+
+# log transform pupilsize
+SE_subset$logPupil = log(SE_subset$PupilSize+1)
+
+ggplot(SE_subset, aes(PupilSize))+geom_density()
+ggplot(SE_subset, aes(logPupil))+geom_density()
+
+
+
+#Create fold with unique ParticipantID
+SE_subset$SubjectN = as.numeric(as.factor(as.character(SE_subset$ParticipantID)))
+folds_SE = createFolds(unique(SE_subset$SubjectN), k = 3)
+
+#Empty df
+Model_Comp_SE = data.frame()
+
+#List of models to loop through
+Models_SE = list("PupilSize ~ 1 + (1|ParticipantID)",
+                 "PupilSize ~ videoLook + TimeScaled + (1+videoLook|ParticipantID)",
+                 "PupilSize ~ videoDirection + TimeScaled + (1+videoDirection|ParticipantID)",
+                 "PupilSize ~ videoLook + videoDirection + TimeScaled + (1+videoLook+videoDirection|ParticipantID)",
+                 "PupilSize ~ videoLook * videoDirection + TimeScaled + (1+videoLook+videoDirection|ParticipantID)"
+)
+
+
+
+#---- LOOP ----
+#k = folds_SE[[1]]
+#MODEL = Models_SE[[1]]
+
+for (MODEL in Models_SE){
+  results = data.frame()
+  for (k in folds_SE){
+    #------ Split into training and test data ------ 
+    #Create training dataset, data not in fold k
+    data_train = subset(SE_subset,!(SE_subset$SubjectN %in% k))
+    #Create test dataset, data in fold k
+    data_test = subset(SE_subset,SubjectN %in% k)
+    
+    #------ train model - apply model to data_train ------
+    m = lmer(MODEL, data_train, REML = F)
+    
+    predict_train = predict(m, data_train, allow.new.levels = T)
+    
+    rmse_train = rmse(data_train$PupilSize, predict_train)
+    
+    
+    #------ test the model - test model on data_test ------
+    
+    predict_test = predict(m, data_test, allow.new.levels = T)
+    
+    rmse_test = rmse(data_test$PupilSize, predict_test)
+    
+    #------ save the performance ------ 
+    
+    var = substring(MODEL, first = 13, last = 100) 
+    
+    one_row = data.frame(Var = var, RMSE_train = rmse_train, RMSE_test = rmse_test)
+    
+    results = rbind(results, one_row)
+  }
+  #Means and SDs
+  train_mean = mean(results$RMSE_train)
+  train_SD = sd(results$RMSE_train)
+  
+  test_mean = mean(results$RMSE_test)
+  test_SD = sd(results$RMSE_test)
+  
+  one_row = data.frame(Var = var, TrainMean = train_mean, TestMean = test_mean, MeanDif = train_mean-test_mean, TrainSD = train_SD, TestSD = test_SD, SdDif = train_SD-test_SD )
+  
+  Model_Comp_SE = rbind(Model_Comp_SE, one_row)
+  
+}
+
+SEmodel = lmer(PupilSize ~ videoDirection + TimeScaled + (1+videoDirection|ParticipantID), SE_subset, REML = F)
+summary(SEmodel)
+
+
+ggplot(SE_subset, aes(x=TrialTime, y=PupilSize))+
+  geom_smooth(aes(color = videoLook))+
+  facet_grid(~ videoDirection)
+
+
+```
+

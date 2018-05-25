@@ -1,0 +1,411 @@
+---
+title: "Assignment3"
+author: "RF"
+date: "3/6/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(tidyverse)
+library(rethinking)
+library(bayesplot)
+library(gridExtra)
+library(grid)
+library(brms)
+
+
+#read data
+d = read.csv("Assignment3Data.csv")
+
+#Subset of data - Children whith ASD at visit 1
+d2 = subset(d, Visit == 1 & ASD == 1)
+
+#color scheme
+color_scheme_set("green")
+
+#multiplot function
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+
+```
+
+## Multivariate linear models
+
+In this assignment you will investigate the relation between different aspects of IQ and symptom severity in ASD (as measured by ADOS). The assignment is meant to make you practice on linear models, multiple predictors and interactions.
+
+The data you will use is the outcome of the psychological testing of the children you analyzed in methods 3.
+Data: https://www.dropbox.com/s/hom2qnmp9hyfwmu/Assignment3Data.csv?dl=0
+The data consists of ChildID, gender, age, diagnosis (ASD), symptom severity (ADOS), several aspects of IQ (NonVerbal/Perceptual,Verbal,Social) and the visit at which the tests were administered. The questions should be answered by focusing on visit 1.
+
+The questions you will have to answer are:
+
+1. Assess the relation between symptom severity and IQ (focus on visit 1 and children with ASD) and report the model, a plot of the model, a couple of lines describing the quality of the model and interpreting the results. P.S. Should you scale? P.P.S. Don't forget to motivate your priors. P.P.P.S. At least one plot for results and a plot for quality of each model (here and in the next questions) would be appreciated.
+
+```{r}
+#Making z-scored IQ variables
+d2$NonVerbalIQ.z = (d2$NonVerbalIQ - mean(d2$NonVerbalIQ))/sd(d2$NonVerbalIQ)
+d2$VerbalIQ.z = (d2$VerbalIQ - mean(d2$VerbalIQ))/sd(d2$VerbalIQ)
+d2$SocialIQ.z = (d2$SocialIQ - mean(d2$SocialIQ))/sd(d2$SocialIQ)
+#z-scoring veriables so the scale with eachother
+
+#grid
+grid = seq(from = -4, to = 4, by = 1e-3)
+```
+
+
+
+1.1. Verbal IQ and ADOS
+```{r}
+m1V = map(
+  alist(
+    ADOS ~ dnorm(mu, sigma),
+    mu <- a + b * VerbalIQ.z, 
+    a ~ dnorm(0,10),
+    b ~ dnorm(0,2),
+    sigma ~ dunif(0,30)
+  ), data = d2
+)
+precis(m1V)
+m1V_table= round(precis(m1V)@output,2)
+row.names(m1V_table) = c("alpha","beta","sigma")
+
+m1V_sim = sim(m1V, data = list(VerbalIQ.z = grid))
+m1V_PI = apply(m1V_sim, 2, PI, prob = 0.89)
+m1V_mu = link(m1V, data = list(VerbalIQ.z = grid))
+m1V_mu.HPDI = apply(m1V_mu, 2, HPDI, prob=0.89)
+
+m1V_grid = data.frame(VerbalIQ.z = grid, HPDI1 = m1V_mu.HPDI[1,], HPDI2 = m1V_mu.HPDI[2,], PI1 = m1V_PI[1,], PI2 = m1V_PI[2,])
+
+#plot
+m1V_plot = ggplot(m1V_grid, aes(x = VerbalIQ.z)) +
+  geom_ribbon(aes(ymin = PI1,ymax = PI2), fill = "#9fdfbf") +
+  geom_ribbon(aes(ymin = HPDI1,ymax = HPDI2), fill = "#40bf80") +
+  geom_abline(intercept = m1V@coef[["a"]], slope = m1V@coef[["b"]], color = "#194d33") +
+  geom_point(data = d2, aes(y = ADOS), size = 1.2) + 
+  xlim(-2,2) +
+  xlab("Verbal IQ") +
+  theme(plot.title = element_text(size = 10)) + 
+  ggtitle("a)")
+
+
+#Dens plot
+m1V_dens.sim = sim(m1V, data = d2)
+m1V_dens = ppc_dens_overlay(d2$ADOS, m1V_dens.sim, adjust = .6) +
+  geom_density(data = data.frame(x = as.vector(m1V_dens.sim)), aes(x = x), adjust = .6, color="red") +
+  guides(color="none") +
+  theme(plot.title = element_text(size = 10)) + 
+  ggtitle("d)") 
+
+```
+
+1.2. Non Verbal IQ and ADOS
+```{r}
+m1NV = map(
+  alist(
+    ADOS ~ dnorm(mu, sigma),
+    mu <- a + b * NonVerbalIQ.z, 
+    a ~ dnorm(0,10),
+    b ~ dnorm(0,2),
+    sigma ~ dunif(0,30)
+  ), data = d2
+)
+
+precis(m1NV)
+m1NV_table= round(precis(m1NV)@output,2)
+row.names(m1NV_table) = c("alpha","beta","sigma")
+
+m1NV_sim = sim(m1NV, data = list(NonVerbalIQ.z = grid))
+m1NV_PI = apply(m1NV_sim, 2, PI, prob = 0.89)
+m1NV_mu = link(m1NV, data = list(NonVerbalIQ.z = grid))
+m1NV_mu.HPDI = apply(m1NV_mu, 2, HPDI, prob=0.89)
+
+m1NV_grid = data.frame(NonVerbalIQ.z = grid, HPDI1 = m1NV_mu.HPDI[1,], HPDI2 = m1NV_mu.HPDI[2,], PI1 = m1NV_PI[1,], PI2 = m1NV_PI[2,])
+
+#plot
+m1NV_plot = ggplot(m1NV_grid, aes(x = NonVerbalIQ.z)) +
+  geom_ribbon(aes(ymin = PI1, ymax = PI2), fill = "#9fdfbf") +
+  geom_ribbon(aes(ymin = HPDI1, ymax = HPDI2), fill = "#40bf80") +
+  geom_abline(intercept = m1NV@coef[["a"]], slope = m1NV@coef[["b"]], color = "#194d33") +
+  geom_point(data = d2, aes(y = ADOS), size = 1.2) + 
+  xlim(-2,2) +
+  xlab("Non-Verbal IQ") +
+  theme(axis.title.y = element_blank(), plot.title = element_text(size = 10)) + 
+  ggtitle("b)")
+
+ #Dens plot
+m1NV_dens.sim = sim(m1NV, data = d2)
+m1NV_dens = ppc_dens_overlay(d2$ADOS, m1NV_dens.sim, adjust = .6) +
+  geom_density(data = data.frame(x = as.vector(m1NV_dens.sim)), aes(x = x), adjust = .6, color="red") +
+  guides(color="none") +
+  theme(plot.title = element_text(size = 10)) + 
+  ggtitle("e)") 
+```
+
+1.3. Social IQ and ADOS
+```{r}
+m1S = map(
+  alist(
+    ADOS ~ dnorm(mu, sigma),
+    mu <- a + b * SocialIQ.z, 
+    a ~ dnorm(0,10),
+    b ~ dnorm(0,2),
+    sigma ~ dunif(0,30)
+  ), data = d2
+)
+
+m1S_table= round(precis(m1S)@output,2)
+row.names(m1S_table) = c("alpha","beta","sigma")
+
+
+m1S_sim = sim(m1S, data = list(SocialIQ.z = grid)) 
+m1S_PI = apply(m1S_sim, 2, PI, prob = 0.89)
+m1S_mu = link(m1S, data = list(SocialIQ.z = grid))
+m1S_mu.HPDI = apply(m1S_mu, 2, HPDI, prob=0.89)
+
+m1S_grid = data.frame(SocialIQ.z = grid, HPDI1 = m1S_mu.HPDI[1,], HPDI2 = m1S_mu.HPDI[2,], PI1 = m1S_PI[1,], PI2 = m1S_PI[2,])
+
+m1S_plot = ggplot(m1S_grid, aes(x = SocialIQ.z)) +
+  geom_ribbon(aes(ymin = PI1,ymax = PI2), fill = "#9fdfbf") +
+  geom_ribbon(aes(ymin = HPDI1,ymax = HPDI2), fill = "#40bf80") +
+  geom_abline(intercept = m1S@coef[["a"]], slope = m1S@coef[["b"]], color = "#194d33") +
+  geom_point(data = d2, aes(y = ADOS), size = 1.2) + 
+  xlim(-2,2) +
+  xlab("Social IQ") +
+  theme(axis.title.y = element_blank(), plot.title = element_text(size = 10)) +
+  ggtitle("c)")
+
+#Dens plot
+m1S_dens.sim = sim(m1S, data = d2)
+m1S_dens = ppc_dens_overlay(d2$ADOS, m1S_dens.sim, adjust = .6) +
+  geom_density(data = data.frame(x = as.vector(m1S_dens.sim)), aes(x = x), adjust = .6, color="red") +
+  guides(color="none") +
+  theme(plot.title = element_text(size = 10)) + 
+  ggtitle("f)") 
+
+```
+ 
+ Plots and tables
+ 
+```{r}
+multiplot(m1V_plot, m1V_dens, m1NV_plot, m1NV_dens, m1S_plot, m1S_dens, cols = 3)
+
+
+
+model_names = data.frame(names = c("\nVerbal IQ", "\nNon-Verbal IQ", "\nSocial IQ"), x = "")
+row.names(model_names) = c(""," ","  ")
+
+frame()
+t_model = ttheme_minimal(rowhead=list(fg_params = list(parse=TRUE)), core=list(
+        fg_params=list(fontsize = 10)))
+t_table = ttheme_minimal(rowhead=list(fg_params = list(parse=TRUE)))
+
+Vname = tableGrob(model_names[1,], cols = NULL, theme=t_model)
+Tm1V = tableGrob(m1V_table, theme = t_table)
+NVname = tableGrob(model_names[2,], cols = NULL, theme=t_model)
+Tm1NV = tableGrob(m1NV_table, theme = t_table)
+Sname = tableGrob(model_names[3,], cols = NULL, theme=t_model)
+Tm1S= tableGrob(m1S_table, theme = t_table)
+table = gtable_combine(Vname,Tm1V,NVname,Tm1NV,Sname,Tm1S, along=2)
+
+grid.arrange(table, ncol=1)
+
+```
+
+2. Do the different aspects of IQ account for different portions of the variance in ADOS? 
+2.1. Does it make sense to have all IQ measures in the same model? First write a few lines answering the question and motivating your answer, including a discussion as to what happens when you put all of them in the same model. Then build a model following your answer. If your answer is "no", you are not free, you still have to answer: are there alternative ways of answering the question?
+2.2. Build the model, assess its quality, write a few lines interpreting the results.
+
+```{r}
+cor(d2$NonVerbalIQ.z,d2$VerbalIQ.z)
+cor(d2$NonVerbalIQ.z,d2$SocialIQ.z)
+cor(d2$SocialIQ.z,d2$VerbalIQ.z)
+
+m2 = map(
+  alist(
+    ADOS ~ dnorm(mu, sigma),
+    mu <- a + bv * VerbalIQ.z + bnv * NonVerbalIQ.z + bs * SocialIQ.z, 
+    a ~ dnorm(0,10),
+    bv ~ dnorm(0,2),
+    bnv ~ dnorm(0,2),
+    bs ~ dnorm(0,2),
+    sigma ~ dunif(0,30)
+  ), data = d2
+)
+
+precis(m2, corr=T)
+m2_table = round(precis(m2, corr=T)@output[,1:4],2)
+row.names(m2_table) = c("alpha",expression(paste(beta,"v")),expression(paste(beta,"n")),expression(paste(beta,"s")),"sigma")
+
+frame()
+grid.table(m2_table, theme = t_table)
+
+
+#Dens plot
+m2_dens.sim = sim(m2, data = d2)
+ppc_dens_overlay(d2$ADOS, m2_dens.sim, adjust = .6) +
+  geom_density(data = data.frame(x = as.vector(m2_dens.sim)), aes(x = x), adjust = .6, color="red") +
+  guides(color="none")
+
+
+precis_plot(precis(m2))
+
+
+```
+
+
+
+3. Let's now include also the TD children. Does it make sense to ask whether IQ and ADOS are related? Motivate your answer. In any case, if you wanted to build a model to answer that question, which model would you build? Run the model, assess its quality, write a few lines interpreting the results.
+
+```{r}
+d3 = subset(d, Visit == 1)
+d3 = na.omit(d3)
+
+d3$NonVerbalIQ.z = (d3$NonVerbalIQ - mean(d3$NonVerbalIQ))/sd(d3$NonVerbalIQ)
+d3$VerbalIQ.z = (d3$VerbalIQ - mean(d3$VerbalIQ))/sd(d3$VerbalIQ)
+d3$SocialIQ.z = (d3$SocialIQ - mean(d3$SocialIQ))/sd(d3$SocialIQ)
+
+d3$ASD = as.factor(d3$ASD)
+
+ggplot(d3, aes(x = ADOS, color = ASD, fill = ASD)) +
+  geom_density(alpha = .4, adjust = 0.8) +
+  geom_point(aes(x = ADOS, y = Visit-.5, color = ASD, alpha=.4, size = 1.5),position=position_jitter(width = 0.05, height = 0.3)) +
+  theme(legend.position="none", axis.title.y = element_blank())
+
+
+
+mean(d3_ASD$SocialIQ.z) - mean(d3_TD$SocialIQ.z)
+
+mean(d3_ASD$VerbalIQ.z) - mean(d3_TD$VerbalIQ.z)
+
+mean(d3_ASD$NonVerbalIQ.z) - mean(d3_TD$NonVerbalIQ.z)
+
+
+m3 = map(
+  alist(
+    ADOS ~ dnorm(mu, sigma),
+    mu <- a + bv * VerbalIQ.z + bnv * NonVerbalIQ.z + bs * SocialIQ.z, 
+    a ~ dnorm(0,10),
+    bv ~ dnorm(0,2),
+    bnv ~ dnorm(0,2),
+    bs ~ dnorm(0,2),
+    sigma ~ dunif(0,30)
+  ), data = d3
+)
+
+precis(m3)
+precis_plot(precis(m3))
+
+d3$ASD = as.numeric(d3$ASD)-1
+
+m3.2 = map(
+  alist(
+    ADOS ~ dnorm(mu, sigma),
+    mu <- a + bv *VerbalIQ.z + bnv * NonVerbalIQ.z + bs * SocialIQ.z + bd * ASD, 
+    a ~ dnorm(0,10),
+    bv ~ dnorm(0,2),
+    bnv ~ dnorm(0,2),
+    bs ~ dnorm(0,2),
+    bd ~ dunif(0,1),
+    sigma ~ dunif(0,10)
+  ), data = d3, start = list(bd = 0, a = 7, bv = 0, bnv = 0, bs = -5, sigma = 4)
+)
+get_prior(ADOS ~ ASD + VerbalIQ.z+ NonVerbalIQ.z+ SocialIQ.z, data = d3)
+m3.2 = brm(ADOS ~ ASD + VerbalIQ.z+ NonVerbalIQ.z+ SocialIQ.z,
+         prior = c(prior(normal(0,10), class = Intercept),
+         prior(normal(0,1), class = b, coef = ASD),
+         prior(normal(0,2), class = b, coef = NonVerbalIQ.z),
+         prior(normal(0,2), class = b, coef = SocialIQ.z),
+         prior(normal(0,2), class = b, coef = VerbalIQ.z),
+         prior(cauchy(0,2), class = sigma)),
+         data = d3,
+         cores = 2,
+         chain = 2,
+         iter = 20000,
+         warmup = 5000
+         )
+summary(m3.2)
+
+plot(d3$ASD ~ d3$SocialIQ.z)
+```
+
+
+
+4. Let's discuss contents:
+4.1. You have three scores for IQ, do they show shared variance? Is that the same in TD and ASD? What does that tell us about IQ?
+4.2. You have explored the relation between IQ and ADOS. How do you explain that relation from a cognitive perspective? N.B. You can present alternative hypotheses.
+
+```{r}
+d3_TD = subset(d3, ASD == 0)
+d3_ASD = subset(d3, ASD == 1)
+
+corrs = data.frame(
+  ASD = c(
+    cor(d3_ASD$NonVerbalIQ.z,d3_ASD$VerbalIQ.z),
+    cor(d3_ASD$SocialIQ.z,d3_ASD$NonVerbalIQ.z),
+    cor(d3_ASD$SocialIQ.z,d3_ASD$VerbalIQ.z)),
+  TD = c(
+    cor(d3_TD$VerbalIQ.z,d3_TD$NonVerbalIQ.z),
+    cor(d3_TD$SocialIQ.z,d3_TD$NonVerbalIQ.z),
+    cor(d3_TD$SocialIQ.z,d3_TD$VerbalIQ.z)),
+  All = c(
+    cor(d3$VerbalIQ.z,d3$NonVerbalIQ.z),
+    cor(d3$SocialIQ.z,d3$NonVerbalIQ.z),
+    cor(d3$SocialIQ.z,d3$VerbalIQ.z)
+  )
+)
+
+corrs = round(corrs,2)
+frame()
+row.names(corrs) = c("Non-verbal, Verbal", "Social, Non-verbal", "Social, Verbal")
+
+grid.table(corrs, theme = t_table)
+
+pairs(~ VerbalIQ.z + NonVerbalIQ.z + SocialIQ.z, data = d3)
+
+
+```
+
+
+5. Bonus questions: Including measurement errors. 
+5.1. Let's assume that ADOS has a measurement error of 1. How would you model that in any of the previous models? 
+5.2. We know that IQ has an estimated measurement error of 2.12. How would you include that? 
+
+
